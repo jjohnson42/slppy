@@ -29,7 +29,6 @@ srvreqfooter = b'\x00\x07DEFAULT\x00\x00\x00\x00'
 attrlistext = b'\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00'
 
 
-
 def _list_ips():
     # Used for getting addresses to indicate the multicast address
     # as well as getting all the broadcast addresses
@@ -49,7 +48,7 @@ def list_interface_indexes():
             intidx = int(ifile.read())
             ifile.close()
             yield intidx
-    except IOError, WindowsError:
+    except (IOError, WindowsError):
         # Probably situation is non-Linux, just do limited support for
         # such platforms until other people come alonge
         return
@@ -58,21 +57,22 @@ def list_interface_indexes():
 def _v6mcasthash(srvtype):
     # The hash algorithm described by RFC 3111
     nums = bytearray(srvtype.encode('utf-8'))
-    hash = 0
+    hashval = 0
     for i in nums:
-        hash *= 33
-        hash += i
-        hash &= 0xffff  # only need to track the lowest 16 bits
-    hash &= 0x3ff
-    hash |= 0x1000
+        hashval *= 33
+        hashval += i
+        hashval &= 0xffff  # only need to track the lowest 16 bits
+    hashval &= 0x3ff
+    hashval |= 0x1000
     return '{0:x}'.format(hash)
+
 
 def _generate_slp_header(payload, multicast, functionid, xid, extoffset=0):
     if multicast:
         flags = 0x2000
     else:
         flags = 0
-    packetlen = len(payload) + 16 # we have a fixed 16 byte header supported
+    packetlen = len(payload) + 16  # we have a fixed 16 byte header supported
     if extoffset:  # if we have an offset, add 16 to account for this function
         # generating a 16 byte header
         extoffset += 16
@@ -110,7 +110,7 @@ def _find_srvtype(net, srvtype, addresses):
 
     Helper to do singleton requests to srvtype
 
-    :param socket: Socket active
+    :param net: Socket active
     :param srvtype: Service type to do now
     :param addresses:  Pass through of addresses argument from find_targets
     :return:
