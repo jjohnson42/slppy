@@ -16,6 +16,8 @@
 
 import netifaces
 import os
+import random
+import select
 import socket
 import struct
 
@@ -64,7 +66,7 @@ def _v6mcasthash(srvtype):
         hashval &= 0xffff  # only need to track the lowest 16 bits
     hashval &= 0x3ff
     hashval |= 0x1000
-    return '{0:x}'.format(hash)
+    return '{0:x}'.format(hashval)
 
 
 def _generate_slp_header(payload, multicast, functionid, xid, extoffset=0):
@@ -92,7 +94,7 @@ def _generate_slp_header(payload, multicast, functionid, xid, extoffset=0):
     return header
 
 
-def _generate_request_payload(srvtype, multicast, prlist=''):
+def _generate_request_payload(srvtype, multicast, xid, prlist=''):
     prlist = prlist.encode('utf-8')
     payload = bytearray(struct.pack('!H', len(prlist)) + prlist)
     srvtype = srvtype.encode('utf-8')
@@ -100,12 +102,12 @@ def _generate_request_payload(srvtype, multicast, prlist=''):
     payload.extend(srvreqfooter)
     extoffset = len(payload)
     payload.extend(attrlistext)
-    header = _generate_slp_header(payload, multicast, functionid=1, xid=1,
+    header = _generate_slp_header(payload, multicast, functionid=1, xid=xid,
                                   extoffset=extoffset)
     return header + payload
 
 
-def _find_srvtype(net, srvtype, addresses):
+def _find_srvtype(net, srvtype, addresses, xid):
     """Internal function to find a single service type
 
     Helper to do singleton requests to srvtype
@@ -116,7 +118,7 @@ def _find_srvtype(net, srvtype, addresses):
     :return:
     """
     if addresses is None:
-        data = _generate_request_payload(srvtype, True)
+        data = _generate_request_payload(srvtype, True, xid)
         net.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         v6addrs = []
         v6hash = _v6mcasthash(srvtype)
@@ -169,8 +171,17 @@ def find_targets(srvtypes, addresses=None):
     # too, so force it
     net.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 0)
     # we are going to do broadcast, so allow that...
+    initxid = random.randint(0, 32768)
+    xididx = 0
     for srvtype in srvtypes:
-        _find_srvtype(net, srvtype, addresses)
+        xididx += 1
+        _find_srvtype(net, srvtype, addresses, initxid + xididx)
+    r, _, _ = select.select((net,), (), (), 2)
+    while r:
+        (rsp, peer) = net.recvfrom(9000)
+        print(repr(rsp))
+        r, _, _ = select.select((net,), (), (), 2)
+
 
 
 if __name__ == '__main__':
