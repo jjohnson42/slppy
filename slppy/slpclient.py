@@ -39,6 +39,7 @@ def _list_ips():
         if netifaces.AF_INET in addrs:
             yield addrs[netifaces.AF_INET]
 
+
 def _parse_slp_header(packet):
     packet = bytearray(packet)
     if len(packet) < 16 or packet[0] != 2:
@@ -57,8 +58,40 @@ def _parse_slp_header(packet):
     return parsed
 
 
-def _parse_slp_packet(packet):
+def _pop_url(payload):
+    urllen = struct.unpack('!H', bytes(payload[3:5]))[0]
+    url = bytes(payload[5:5+urllen]).decode('utf-8')
+    if payload[5+urllen] != 0:
+        raise Exception('Auth blocks unsupported')
+    payload = payload[5+urllen+1:]
+    return url, payload
+
+
+def _parse_SrvRply(parsed):
+    """ Modify passed dictionary to have parsed data
+
+
+    :param parsed:
+    :return:
+    """
+    payload = parsed['payload']
+    ecode, ucount = struct.unpack('!HH', bytes(payload[0:4]))
+    if ecode:
+        parsed['errorcode'] = ecode
+    payload = payload[4:]
+    parsed['urls'] = []
+    while ucount:
+        ucount -= 1
+        url, payload = _pop_url(payload)
+        parsed['urls'].append(url)
+
+
+def _parse_slp_packet(packet, peer):
     parsed = _parse_slp_header(packet)
+    parsed['address'] = peer
+    if parsed['function'] == 2:  # A service reply
+        _parse_SrvRply(parsed)
+    del parsed['payload']
     print(repr(parsed))
 
 
@@ -201,7 +234,7 @@ def find_targets(srvtypes, addresses=None):
     r, _, _ = select.select((net,), (), (), 2)
     while r:
         (rsp, peer) = net.recvfrom(9000)
-        _parse_slp_packet(rsp)
+        _parse_slp_packet(rsp, peer)
         r, _, _ = select.select((net,), (), (), 2)
 
 
