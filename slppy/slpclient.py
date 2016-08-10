@@ -39,6 +39,28 @@ def _list_ips():
         if netifaces.AF_INET in addrs:
             yield addrs[netifaces.AF_INET]
 
+def _parse_slp_header(packet):
+    packet = bytearray(packet)
+    if len(packet) < 16 or packet[0] != 2:
+        # discard packets that are obviously useless
+        return None
+    parsed = {
+        'function': packet[1],
+    }
+    (offset, parsed['xid'], langlen) = struct.unpack('!IHH',
+                                           bytes(b'\x00' + packet[7:14]))
+    parsed['lang'] = packet[14:14 + langlen].decode('utf-8')
+    parsed['payload'] = packet[14 + langlen:]
+    if offset:
+        parsed['offset'] = 14 + langlen
+        parsed['extoffset'] = offset
+    return parsed
+
+
+def _parse_slp_packet(packet):
+    parsed = _parse_slp_header(packet)
+    print(repr(parsed))
+
 
 def list_interface_indexes():
     # Getting the interface indexes in a portable manner
@@ -179,9 +201,8 @@ def find_targets(srvtypes, addresses=None):
     r, _, _ = select.select((net,), (), (), 2)
     while r:
         (rsp, peer) = net.recvfrom(9000)
-        print(repr(rsp))
+        _parse_slp_packet(rsp)
         r, _, _ = select.select((net,), (), (), 2)
-
 
 
 if __name__ == '__main__':
