@@ -20,6 +20,7 @@ import random
 import select
 import socket
 import struct
+import subprocess
 
 
 # SLP has a lot of ambition that was unfulfilled in practice.
@@ -29,6 +30,24 @@ srvreqfooter = b'\x00\x07DEFAULT\x00\x00\x00\x00'
 # An empty instance of the attribute list extension
 # which is defined in RFC 3059, used to indicate support for that capability
 attrlistext = b'\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00'
+
+
+neightable = {}
+neightime = 0
+
+
+def update_neigh():
+    ipn = subprocess.Popen(['ip', 'neigh'], stdin=subprocess.PIPE,
+                                 stdout=subprocess.PIPE,
+                                 stderr=subprocess.PIPE)
+    (neighdata, err) = ipn.communicate()
+    rc = ipn.returncode
+
+
+
+def refresh_neigh():
+    if os.times()[4] > (neightime + 30):
+        update_neigh()
 
 
 def _list_ips():
@@ -215,6 +234,7 @@ def _grab_rsps(socks, rsps, interval):
     while r:
         for s in r:
             (rsp, peer) = s.recvfrom(9000)
+            _refresh_neigh
             parsed = _parse_slp_packet(rsp, peer, rsps)
             r, _, _ = select.select(socks, (), (), interval)
 
