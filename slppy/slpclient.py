@@ -37,7 +37,8 @@ def _list_ips():
     for iface in netifaces.interfaces():
         addrs = netifaces.ifaddresses(iface)
         if netifaces.AF_INET in addrs:
-            yield addrs[netifaces.AF_INET]
+            for addr in addrs[netifaces.AF_INET]:
+                yield addr
 
 
 def _parse_slp_header(packet):
@@ -88,11 +89,13 @@ def _parse_SrvRply(parsed):
 
 def _parse_slp_packet(packet, peer):
     parsed = _parse_slp_header(packet)
+    if not parsed:
+        return None
     parsed['address'] = peer
     if parsed['function'] == 2:  # A service reply
         _parse_SrvRply(parsed)
     del parsed['payload']
-    print(repr(parsed))
+    return parsed
 
 
 def list_interface_indexes():
@@ -162,7 +165,7 @@ def _generate_request_payload(srvtype, multicast, xid, prlist=''):
     return header + payload
 
 
-def _find_srvtype(net, srvtype, addresses, xid):
+def _find_srvtype(net, net4, srvtype, addresses, xid):
     """Internal function to find a single service type
 
     Helper to do singleton requests to srvtype
@@ -174,7 +177,7 @@ def _find_srvtype(net, srvtype, addresses, xid):
     """
     if addresses is None:
         data = _generate_request_payload(srvtype, True, xid)
-        net.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        net4.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         v6addrs = []
         v6hash = _v6mcasthash(srvtype)
         # do 'interface local' and 'link local'
@@ -197,12 +200,22 @@ def _find_srvtype(net, srvtype, addresses, xid):
             if 'broadcast' not in i4:
                 continue
             addr = i4['addr']
-            bcast = i4['bcast']
+            bcast = i4['broadcast']
             net.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
                            socket.inet_aton(addr))
-            net.sendto(data, ('239.255.255.253', 427))
-            net.sendto(data, (bcast, 427))
+            net4.sendto(data, ('239.255.255.253', 427))
+            net4.sendto(data, (bcast, 427))
 
+
+def _grab_rsps(socks, rsps, interval):
+    r, _, _ = select.select(socks, (), (), interval)
+    while r:
+        for s in r:
+            (rsp, peer) = s.recvfrom(9000)
+            parsed = _parse_slp_packet(rsp, peer)
+            if parsed:
+                rsps.append(parsed)
+            r, _, _ = select.select(socks, (), (), interval)
 
 def find_targets(srvtypes, addresses=None):
     """Find targets providing matching requested srvtypes
@@ -218,6 +231,7 @@ def find_targets(srvtypes, addresses=None):
     :return: Iterable set of results
     """
     net = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    net4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     # TODO: increase RCVBUF to max, mitigate chance of
     # failure due to full buffer.
     # SLP is very poor at scanning large counts and managing it, so we
@@ -228,14 +242,21 @@ def find_targets(srvtypes, addresses=None):
     # we are going to do broadcast, so allow that...
     initxid = random.randint(0, 32768)
     xididx = 0
+    xidmap = {}
+    # First we give fast repsonders of each srvtype individual chances to be
+    # processed, mitigating volume of response traffic
+    rsps = []
     for srvtype in srvtypes:
         xididx += 1
-        _find_srvtype(net, srvtype, addresses, initxid + xididx)
-    r, _, _ = select.select((net,), (), (), 2)
-    while r:
-        (rsp, peer) = net.recvfrom(9000)
-        _parse_slp_packet(rsp, peer)
-        r, _, _ = select.select((net,), (), (), 2)
+        _find_srvtype(net, net4, srvtype, addresses, initxid + xididx)
+        xidmap[initxid + xididx] = srvtype
+        _grab_rsps((net, net4), rsps, 0.1)
+        # now do a more slow check to work to get stragglers,
+        # but fortunately the above should have taken the brunt of volume, so
+        # reduced chance of many responses overwhelming receive buffer.
+    _grab_rsps((net, net4), rsps, 1)
+    # now to analyze and flesh out the responses
+    print(repr(rsps))
 
 
 if __name__ == '__main__':
