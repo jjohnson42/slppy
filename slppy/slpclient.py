@@ -87,15 +87,18 @@ def _parse_SrvRply(parsed):
         parsed['urls'].append(url)
 
 
-def _parse_slp_packet(packet, peer):
+def _parse_slp_packet(packet, peer, rsps):
     parsed = _parse_slp_header(packet)
     if not parsed:
-        return None
+        return
+    if (peer, parsed['xid']) in rsps:
+        # avoid obviously duplicate entries
+        return
     parsed['address'] = peer
     if parsed['function'] == 2:  # A service reply
         _parse_SrvRply(parsed)
     del parsed['payload']
-    return parsed
+    rsps[(peer, parsed['xid'])] = parsed
 
 
 def list_interface_indexes():
@@ -212,9 +215,7 @@ def _grab_rsps(socks, rsps, interval):
     while r:
         for s in r:
             (rsp, peer) = s.recvfrom(9000)
-            parsed = _parse_slp_packet(rsp, peer)
-            if parsed:
-                rsps.append(parsed)
+            parsed = _parse_slp_packet(rsp, peer, rsps)
             r, _, _ = select.select(socks, (), (), interval)
 
 def find_targets(srvtypes, addresses=None):
@@ -245,7 +246,7 @@ def find_targets(srvtypes, addresses=None):
     xidmap = {}
     # First we give fast repsonders of each srvtype individual chances to be
     # processed, mitigating volume of response traffic
-    rsps = []
+    rsps = {}
     for srvtype in srvtypes:
         xididx += 1
         _find_srvtype(net, net4, srvtype, addresses, initxid + xididx)
@@ -256,7 +257,8 @@ def find_targets(srvtypes, addresses=None):
         # reduced chance of many responses overwhelming receive buffer.
     _grab_rsps((net, net4), rsps, 1)
     # now to analyze and flesh out the responses
-    print(repr(rsps))
+    for resp in rsps:
+        print(repr(rsps[resp]))
 
 
 if __name__ == '__main__':
