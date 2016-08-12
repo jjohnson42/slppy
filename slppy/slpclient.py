@@ -121,7 +121,7 @@ def _parse_SrvRply(parsed):
         parsed['urls'].append(url)
 
 
-def _parse_slp_packet(packet, peer, rsps):
+def _parse_slp_packet(packet, peer, rsps, xidmap):
     parsed = _parse_slp_header(packet)
     if not parsed:
         return
@@ -141,6 +141,8 @@ def _parse_slp_packet(packet, peer, rsps):
         rsps[(identifier, parsed['xid'])] = parsed
     if mac and 'mac' not in parsed:
         parsed['mac'] = mac
+    if parsed['xid'] in xidmap:
+        parsed['service'] = xidmap[parsed['xid']]
     if 'addresses' in parsed:
         if peer not in parsed['addresses']:
             parsed['addresses'].append(peer)
@@ -203,6 +205,13 @@ def _generate_slp_header(payload, multicast, functionid, xid, extoffset=0):
     header.extend(b'en')
     return header
 
+def _generate_attr_requpest(service, xid):
+    service = service.encode('utf-8')
+    payload = bytearray(struct.pack('!HH', 0, len(service)) + service)
+    payload.extend(srvreqfooter)
+    header = _generate_slp_header(payload, False, functionid=6, xid=xid)
+
+
 
 def _generate_request_payload(srvtype, multicast, xid, prlist=''):
     prlist = prlist.encode('utf-8')
@@ -259,15 +268,35 @@ def _find_srvtype(net, net4, srvtype, addresses, xid):
             net4.sendto(data, (bcast, 427))
 
 
-def _grab_rsps(socks, rsps, interval):
+def _grab_rsps(socks, rsps, interval, xidmap):
     r, _, _ = select.select(socks, (), (), interval)
     while r:
         for s in r:
             (rsp, peer) = s.recvfrom(9000)
             _refresh_neigh()
-            parsed = _parse_slp_packet(rsp, peer, rsps)
+            parsed = _parse_slp_packet(rsp, peer, rsps, xidmap)
             r, _, _ = select.select(socks, (), (), interval)
 
+
+
+
+def _add_attributes(parsed):
+    attrq = _generate_attr_request(parsed['service'], parsed['xid'])
+    return
+    target = None
+    # prefer reaching out to an fe80 if present, to be highly robust
+    # in face of network changes
+    for addr in parsed['addresses']:
+        if addr[0].startswith('fe80'):
+            target = addr
+    # however if no fe80 seen, roll with the first available address
+    if not target:
+        target = parsed['addresses'][0]
+    if len(target) == 4:
+        net = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    else:
+        net = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    net.connect(target)
 
 def find_targets(srvtypes, addresses=None):
     """Find targets providing matching requested srvtypes
@@ -302,14 +331,15 @@ def find_targets(srvtypes, addresses=None):
         xididx += 1
         _find_srvtype(net, net4, srvtype, addresses, initxid + xididx)
         xidmap[initxid + xididx] = srvtype
-        _grab_rsps((net, net4), rsps, 0.1)
+        _grab_rsps((net, net4), rsps, 0.1, xidmap)
         # now do a more slow check to work to get stragglers,
         # but fortunately the above should have taken the brunt of volume, so
         # reduced chance of many responses overwhelming receive buffer.
-    _grab_rsps((net, net4), rsps, 1)
+    _grab_rsps((net, net4), rsps, 1, xidmap)
     # now to analyze and flesh out the responses
-    for resp in rsps:
-        print(repr(rsps[resp]))
+    for id in rsps:
+        _add_attributes(rsps[id])
+        print(repr(rsps[id]))
 
 
 if __name__ == '__main__':
