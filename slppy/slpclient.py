@@ -33,19 +33,34 @@ attrlistext = b'\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00'
 
 
 neightable = {}
+mactable = {}
 neightime = 0
 
 
 def update_neigh():
+    global neightable
+    neightable = {}
+    mactable = {}
+    if os.name == 'nt':
+        return
     ipn = subprocess.Popen(['ip', 'neigh'], stdin=subprocess.PIPE,
                                  stdout=subprocess.PIPE,
                                  stderr=subprocess.PIPE)
     (neighdata, err) = ipn.communicate()
-    rc = ipn.returncode
+    for entry in neighdata.split('\n'):
+        entry = entry.split(' ')
+        if len(entry) < 5 or not entry[4]:
+            continue
+        neightable[entry[0]] = entry[4]
+        if entry[4] in mactable:
+            mactable[entry[4]].append(entry[0])
+        else:
+            mactable[entry[4]] = [entry[0]]
 
 
-
-def refresh_neigh():
+def _refresh_neigh():
+    if os.name == 'nt':
+        return
     if os.times()[4] > (neightime + 30):
         update_neigh()
 
@@ -110,14 +125,29 @@ def _parse_slp_packet(packet, peer, rsps):
     parsed = _parse_slp_header(packet)
     if not parsed:
         return
-    if (peer, parsed['xid']) in rsps:
+    addr = peer[0]
+    if '%' in addr:
+        addr = addr[:addr.index('%')]
+    mac = None
+    if addr in neightable:
+        identifier = neightable[addr]
+        mac = identifier
+    else:
+        identifier = addr
+    if (identifier, parsed['xid']) in rsps:
         # avoid obviously duplicate entries
-        return
-    parsed['address'] = peer
+        parsed = rsps[(identifier, parsed['xid'])]
+    else:
+        rsps[(identifier, parsed['xid'])] = parsed
+    if mac and 'mac' not in parsed:
+        parsed['mac'] = mac
+    if 'addresses' in parsed:
+        if peer not in parsed['addresses']:
+            parsed['addresses'].append(peer)
+    else:
+        parsed['addresses'] = [peer]
     if parsed['function'] == 2:  # A service reply
         _parse_SrvRply(parsed)
-    del parsed['payload']
-    rsps[(peer, parsed['xid'])] = parsed
 
 
 def list_interface_indexes():
@@ -234,9 +264,10 @@ def _grab_rsps(socks, rsps, interval):
     while r:
         for s in r:
             (rsp, peer) = s.recvfrom(9000)
-            _refresh_neigh
+            _refresh_neigh()
             parsed = _parse_slp_packet(rsp, peer, rsps)
             r, _, _ = select.select(socks, (), (), interval)
+
 
 def find_targets(srvtypes, addresses=None):
     """Find targets providing matching requested srvtypes
