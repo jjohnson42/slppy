@@ -205,11 +205,12 @@ def _generate_slp_header(payload, multicast, functionid, xid, extoffset=0):
     header.extend(b'en')
     return header
 
-def _generate_attr_requpest(service, xid):
+def _generate_attr_request(service, xid):
     service = service.encode('utf-8')
     payload = bytearray(struct.pack('!HH', 0, len(service)) + service)
     payload.extend(srvreqfooter)
     header = _generate_slp_header(payload, False, functionid=6, xid=xid)
+    return header + payload
 
 
 
@@ -279,10 +280,67 @@ def _grab_rsps(socks, rsps, interval, xidmap):
 
 
 
+def _parse_attrlist(attrstr):
+    attribs = {}
+    while attrstr:
+        if attrstr[0] == '(':
+            if ')' not in attrstr:
+                attribs['INCOMPLETE'] = True
+                return attribs
+            currattr = attrstr[1:attrstr.index(')')]
+            if '=' not in currattr:  # Not allegedly kosher, but still..
+                attribs[currattr] = None
+            else:
+                attrname, attrval = currattr.split('=')
+                attribs[attrname] = []
+                for val in attrval.split(','):
+                    if val[:3] == '\\FF':  # we should make this bytes
+                        finalval = bytearray([])
+                        for bnum in attrval[3:].split('\\'):
+                            if bnum == '':
+                                continue
+                            finalval.append(int(bnum, 16))
+                        val = finalval
+                        if 'uuid' in attrname and len(val) == 16:
+                            lebytes = struct.unpack_from(
+                                '<IHH', buffer(val[:8]))
+                            bebytes = struct.unpack_from(
+                                '>HHI', buffer(val[8:]))
+                            val = '{0:08X}-{1:04X}-{2:04X}-{3:04X}-' \
+                                  '{4:04X}{5:08X}'.format(
+                                lebytes[0], lebytes[1], lebytes[2], bebytes[0],
+                                bebytes[1], bebytes[2]
+                            )
+                    attribs[attrname].append(val)
+            attrstr = attrstr[attrstr.index(')'):]
+        elif attrstr[0] == ',':
+            attrstr = attrstr[1:]
+        elif ',' in attrstr:
+            currattr = attrstr[:attrstr.index(',')]
+            attribs[currattr] = None
+            attrstr = attrstr[attrstr.index(','):]
+        else:
+            currattr = attrstr
+            attribs[currattr] = None
+            attrstr = None
+    print(repr(attribs))
+    return attribs
+
+
+def _parse_attrs(data, parsed):
+    headinfo = _parse_slp_header(data)
+    if headinfo['function'] != 7 or headinfo['xid'] != parsed['xid']:
+        return
+    payload = headinfo['payload']
+    if struct.unpack('!H', bytes(payload[:2]))[0] != 0:
+        return
+    length = struct.unpack('!H', bytes(payload[2:4]))[0]
+    attrstr = bytes(payload[4:4+length]).decode('utf-8')
+    parsed['attributes'] = _parse_attrlist(attrstr)
+
 
 def _add_attributes(parsed):
     attrq = _generate_attr_request(parsed['service'], parsed['xid'])
-    return
     target = None
     # prefer reaching out to an fe80 if present, to be highly robust
     # in face of network changes
@@ -297,6 +355,11 @@ def _add_attributes(parsed):
     else:
         net = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     net.connect(target)
+    net.sendall(attrq)
+    rsp = net.recv(8192)
+    net.close()
+    _parse_attrs(rsp, parsed)
+
 
 def find_targets(srvtypes, addresses=None):
     """Find targets providing matching requested srvtypes
@@ -339,6 +402,9 @@ def find_targets(srvtypes, addresses=None):
     # now to analyze and flesh out the responses
     for id in rsps:
         _add_attributes(rsps[id])
+        del rsps[id]['payload']
+        del rsps[id]['function']
+        del rsps[id]['xid']
         print(repr(rsps[id]))
 
 
