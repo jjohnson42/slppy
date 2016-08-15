@@ -361,6 +361,32 @@ def _add_attributes(parsed):
     _parse_attrs(rsp, parsed)
 
 
+def query_srvtypes(target):
+    """Query the srvtypes advertised by the target
+
+    :param target: A sockaddr tuple (if you get the peer info)
+    """
+    payload = b'\x00\x00\xff\xff\x00\x07DEFAULT'
+    header = _generate_slp_header(payload, False, functionid=9, xid=1)
+    packet = header + payload
+    if len(target) == 2:
+        net = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    elif len(target) == 4:
+        net = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    net.connect(target)
+    net.sendall(packet)
+    rs = net.recv(8192)
+    net.close()
+    parsed = _parse_slp_header(rs)
+    if parsed:
+        payload = parsed['payload']
+        if payload[:2] != '\x00\x00':
+            return
+        stypelen = struct.unpack('!H', bytes(payload[2:4]))[0]
+        stypes = payload[4:4+stypelen].decode('utf-8')
+        return stypes.split(',')
+
+
 def find_targets(srvtypes, addresses=None):
     """Find targets providing matching requested srvtypes
 
