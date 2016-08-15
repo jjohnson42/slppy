@@ -373,6 +373,8 @@ def query_srvtypes(target):
         net = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     elif len(target) == 4:
         net = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
+    else:
+        raise Exception('Unrecognized target {0}'.format(repr(target)))
     net.connect(target)
     net.sendall(packet)
     rs = net.recv(8192)
