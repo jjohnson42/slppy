@@ -56,9 +56,11 @@ def update_neigh():
             mactable[entry[4]].append(entry[0])
         else:
             mactable[entry[4]] = [entry[0]]
+    neightime = os.times()[4]
 
 
 def _refresh_neigh():
+    global neightime
     if os.name == 'nt':
         return
     if os.times()[4] > (neightime + 30):
@@ -275,7 +277,7 @@ def _grab_rsps(socks, rsps, interval, xidmap):
         for s in r:
             (rsp, peer) = s.recvfrom(9000)
             _refresh_neigh()
-            parsed = _parse_slp_packet(rsp, peer, rsps, xidmap)
+            _parse_slp_packet(rsp, peer, rsps, xidmap)
             r, _, _ = select.select(socks, (), (), interval)
 
 
@@ -387,6 +389,61 @@ def query_srvtypes(target):
         stypelen = struct.unpack('!H', bytes(payload[2:4]))[0]
         stypes = payload[4:4+stypelen].decode('utf-8')
         return stypes.split(',')
+
+
+def snoop_slp(handler):
+    """Watch for SLP activity
+
+    handler will be called with mac address, a list of sockaddrs, and
+     a list of relevant service types as the three arguments
+
+    :param handler:
+    :return:
+    """
+    known_peers = set([])
+    net = socket.socket(socket.AF_INET6, socket.SOCK_DGRAM)
+    net.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+    slpg = socket.inet_pton(socket.AF_INET6, 'ff01::123')
+    slpg2 = socket.inet_pton(socket.AF_INET6, 'ff02::123')
+    for i6idx in list_interface_indexes():
+        mreq = slpg + struct.pack('=I', i6idx)
+        net.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+        mreq = slpg2 + struct.pack('=I', i6idx)
+        net.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_JOIN_GROUP, mreq)
+    net4 = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    slpmcast = socket.inet_pton(socket.AF_INET, '239.255.255.253') + \
+               struct.pack('=I', socket.INADDR_ANY)
+    net4.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, slpmcast)
+    net.bind(('', 427))
+    net4.bind(('', 427))
+    peerbymacaddress = {}
+    while True:
+        newmacs = set([])
+        r, _, _ = select.select((net, net4), (), (), 60)
+        update_neigh()
+        while r:
+            for s in r:
+                (rsp, peer) = s.recvfrom(9000)
+                ip = peer[0].partition('%')[0]
+                if ip not in neightable:
+                    continue
+                if peer in known_peers:
+                    continue
+                known_peers.add(peer)
+                mac = neightable[ip]
+                newmacs.add(mac)
+                if mac in peerbymacaddress:
+                    peerbymacaddress[mac]['peers'].append(peer)
+                else:
+                    q = query_srvtypes(peer)
+                    peerbymacaddress[mac] = {
+                        'services': q,
+                        'peers': [peer],
+                    }
+            r, _, _ = select.select((net, net4), (), (), 0.1)
+        for mac in newmacs:
+            handler(mac, peerbymacaddress[mac]['peers'],
+                    peerbymacaddress[mac]['services'])
 
 
 def find_targets(srvtypes, addresses=None):
