@@ -431,11 +431,18 @@ def snoop_slp(handler):
                     continue
                 known_peers.add(peer)
                 mac = neightable[ip]
-                newmacs.add(mac)
+
                 if mac in peerbymacaddress:
+                    newmacs.add(mac)
                     peerbymacaddress[mac]['peers'].append(peer)
                 else:
                     q = query_srvtypes(peer)
+                    if not q or not q[0]:
+                        # SLP might have started and not ready yet
+                        # ignore for now
+                        known_peers.discard(peer)
+                        continue
+                    newmacs.add(mac)
                     peerbymacaddress[mac] = {
                         'services': q,
                         'peers': [peer],
