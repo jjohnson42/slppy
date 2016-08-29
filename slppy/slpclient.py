@@ -265,7 +265,7 @@ def _find_srvtype(net, net4, srvtype, addresses, xid):
                 continue
             addr = i4['addr']
             bcast = i4['broadcast']
-            net.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
+            net4.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_IF,
                            socket.inet_aton(addr))
             net4.sendto(data, ('239.255.255.253', 427))
             net4.sendto(data, (bcast, 427))
